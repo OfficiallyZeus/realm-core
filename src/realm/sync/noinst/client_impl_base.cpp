@@ -2183,6 +2183,8 @@ std::error_code Session::receive_error_message(const ProtocolErrorInfo& info)
         return ClientError::bad_error_code;
     }
 
+    receive_error_message_hook(info);
+
     if (info.pending_until_server_version) {
         enqueue_pending_error_message(info);
         return {};

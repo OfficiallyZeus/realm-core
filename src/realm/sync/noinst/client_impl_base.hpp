@@ -1081,6 +1081,7 @@ private:
     void check_for_upload_completion();
     void check_for_download_completion();
     void receive_download_message_hook(const SyncProgress&, int64_t, DownloadBatchState);
+    void receive_error_message_hook(const ProtocolErrorInfo&);
 
     friend class Connection;
 };

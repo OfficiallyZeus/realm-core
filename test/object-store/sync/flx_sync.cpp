@@ -34,6 +34,7 @@
 #include "realm/sync/config.hpp"
 #include "realm/sync/noinst/client_history_impl.hpp"
 #include "realm/sync/noinst/pending_bootstrap_store.hpp"
+#include "realm/sync/noinst/pending_error_store.hpp"
 #include "realm/sync/protocol.hpp"
 #include "realm/sync/subscriptions.hpp"
 #include "realm/util/future.hpp"
@@ -81,6 +82,7 @@ const Schema g_simple_embedded_obj_schema{
     {"TopLevel",
      {{"_id", PropertyType::ObjectId, Property::IsPrimary{true}},
       {"queryable_str_field", PropertyType::String | PropertyType::Nullable},
+      {"queryable_int_field", PropertyType::Int | PropertyType::Nullable},
       {"embedded_obj", PropertyType::Object | PropertyType::Nullable, "TopLevel_embedded_obj"}}},
     {"TopLevel_embedded_obj",
      ObjectSchema::ObjectType::Embedded,
@@ -123,6 +125,7 @@ void wait_for_advance(const SharedRealm& realm)
         return !TestHelper::can_advance(realm);
     });
 }
+
 } // namespace
 
 TEST_CASE("flx: connect to FLX-enabled app", "[sync][flx][app]") {
@@ -761,13 +764,120 @@ TEST_CASE("flx: creating an object on a class with no subscription throws", "[sy
     });
 }
 
+TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view while disconnected",
+          "[sync][flx][app]") {
+    AppCreateConfig::FLXSyncRole role;
+    role.name = "compensating_write_perms";
+    role.read = true;
+    role.write =
+        nlohmann::json{{"queryable_str_field", nlohmann::json{{"$in", nlohmann::json::array({"foo", "bar"})}}}};
+    FLXSyncTestHarness::ServerSchema server_schema{
+        g_simple_embedded_obj_schema, {"queryable_str_field", "queryable_int_field"}, {role}};
+    FLXSyncTestHarness harness("flx_bad_query", server_schema);
+
+    auto test_obj_id = ObjectId::gen();
+    harness.load_initial_data([&](auto prep_realm) {
+        CppContext c(prep_realm);
+        Object::create(c, prep_realm, "TopLevel",
+                       util::Any(AnyDict{
+                           {"_id", test_obj_id},
+                           {"queryable_str_field", std::string{"foo"}},
+                           {"queryable_int_field", int64_t(50)},
+                       }));
+    });
+
+    auto [error_received_promise, error_received_future] = util::make_promise_future<void>();
+    auto shared_error_received_promise = std::make_shared<util::Promise<void>>(std::move(error_received_promise));
+
+    create_user_and_log_in(harness.app());
+    SyncTestFile config(harness.app()->current_user(), harness.schema(), SyncConfig::FLXSyncEnabled{});
+    config.cache = false;
+    config.sync_config->on_error_message_received_hook =
+        [promise = std::move(shared_error_received_promise)](std::weak_ptr<SyncSession> weak_session,
+                                                             const sync::ProtocolErrorInfo& info) mutable {
+            auto session = weak_session.lock();
+            if (!session) {
+                return;
+            }
+
+            REQUIRE(sync::ProtocolError(info.raw_error_code) == sync::ProtocolError::compensating_write);
+            session->close();
+            promise->emplace_value();
+        };
+
+    {
+        auto realm = Realm::get_shared_realm(config);
+        auto table = realm->read_group().get_table("class_TopLevel");
+        auto queryable_int_field = table->get_column_key("queryable_int_field");
+        auto new_query = realm->get_latest_subscription_set().make_mutable_copy();
+        new_query.insert_or_assign(Query(table).equal(queryable_int_field, 100));
+        std::move(new_query).commit();
+
+        wait_for_upload(*realm);
+        wait_for_download(*realm);
+
+        CppContext c(realm);
+        realm->begin_transaction();
+        Object::create(c, realm, "TopLevel",
+                       util::Any(AnyDict{
+                           {"_id", test_obj_id},
+                           {"queryable_str_field", std::string{"foo"}},
+                           {"queryable_int_field", int64_t(75)},
+                       }));
+        realm->commit_transaction();
+
+        error_received_future.get();
+        realm->sync_session()->shutdown_and_wait();
+    }
+
+    _impl::RealmCoordinator::clear_all_caches();
+
+    {
+        auto realm = DB::create(sync::make_client_replication(), config.path);
+        TestLogger logger;
+        auto error_store = sync::PendingErrorStore(realm, &logger);
+        auto tr = realm->start_read();
+        auto pending_errors =
+            error_store.peek_pending_errors(tr, static_cast<sync::version_type>(std::numeric_limits<int64_t>::max()));
+
+        REQUIRE(pending_errors.size() == 1);
+        const auto& sync_error = pending_errors[0];
+        CHECK(sync::is_session_level_error(sync::ProtocolError(sync_error.raw_error_code)));
+        CHECK(sync::ProtocolError(sync_error.raw_error_code) == sync::ProtocolError::compensating_write);
+        CHECK(sync_error.compensating_writes.size() == 1);
+        auto write_info = sync_error.compensating_writes[0];
+        CHECK(write_info.primary_key.is_type(type_ObjectId));
+        CHECK(write_info.primary_key.get_object_id() == test_obj_id);
+        CHECK(write_info.object_name == "TopLevel");
+        CHECK_THAT(write_info.reason,
+                   Catch::Matchers::ContainsSubstring("object is outside of the current query view"));
+    }
+
+    harness.load_initial_data([&](SharedRealm realm) {
+        CppContext c(realm);
+        Results res(realm, realm->read_group().get_table("class_TopLevel"));
+        REQUIRE(res.size() == 1);
+
+        Object obj(realm, res.get(0));
+        obj.set_column_value("queryable_int_field", int64_t(100));
+    });
+
+    auto realm = Realm::get_shared_realm(config);
+    wait_for_upload(*realm);
+    wait_for_download(*realm);
+
+    auto top_level_table = realm->read_group().get_table("class_TopLevel");
+    REQUIRE(top_level_table->size() == 1);
+    REQUIRE(top_level_table->get_object_with_primary_key(test_obj_id));
+}
 TEST_CASE("flx: uploading an object that is out-of-view results in compensating write", "[sync][flx][app]") {
     AppCreateConfig::FLXSyncRole role;
     role.name = "compensating_write_perms";
     role.read = true;
     role.write =
         nlohmann::json{{"queryable_str_field", nlohmann::json{{"$in", nlohmann::json::array({"foo", "bar"})}}}};
-    FLXSyncTestHarness::ServerSchema server_schema{g_simple_embedded_obj_schema, {"queryable_str_field"}, {role}};
+    FLXSyncTestHarness::ServerSchema server_schema{
+        g_simple_embedded_obj_schema, {"queryable_str_field", "queryable_int_field"}, {role}};
     FLXSyncTestHarness harness("flx_bad_query", server_schema);
 
     auto make_error_handler = [] {
@@ -799,7 +909,6 @@ TEST_CASE("flx: uploading an object that is out-of-view results in compensating 
         CHECK(write_info.object_name == "TopLevel");
         CHECK_THAT(write_info.reason, Catch::Matchers::ContainsSubstring(error_msg_fragment));
     };
-
     SECTION("compensating write because of permission violation") {
         harness.do_with_new_user([&](auto user) {
             SyncTestFile config(user, harness.schema(), SyncConfig::FLXSyncEnabled{});
