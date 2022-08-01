@@ -252,7 +252,7 @@ private:
 
     std::function<void(const SyncProgress&, int64_t, DownloadBatchState)> m_on_download_message_received_hook;
     std::function<bool(const SyncProgress&, int64_t, DownloadBatchState)> m_on_bootstrap_message_processed_hook;
-    std::function<void(const ProtocolErrorInfo&)> m_on_error_message_received_hook;
+    std::function<bool(const ProtocolErrorInfo&)> m_on_error_message_received_hook;
 
     std::shared_ptr<SubscriptionStore> m_flx_subscription_store;
     int64_t m_flx_active_version = 0;
@@ -927,7 +927,9 @@ void SessionImpl::receive_error_message_hook(const ProtocolErrorInfo& error_info
         return;
     }
 
-    m_wrapper.m_on_error_message_received_hook(error_info);
+    if (!m_wrapper.m_on_error_message_received_hook(error_info)) {
+        m_stopped_for_testing = true;
+    }
 }
 
 // ################ SessionWrapper ################

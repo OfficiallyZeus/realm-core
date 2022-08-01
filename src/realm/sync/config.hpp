@@ -195,8 +195,8 @@ struct SyncConfig {
     std::function<bool(std::weak_ptr<SyncSession>, const sync::SyncProgress&, int64_t, sync::DownloadBatchState)>
         on_bootstrap_message_processed_hook;
     // Will be called after an error message is received and parsed, but before the error handler has been
-    // called.
-    std::function<void(std::weak_ptr<SyncSession>, const sync::ProtocolErrorInfo&)> on_error_message_received_hook;
+    // called. If the function returns false, the sync session will close immediately. For testing only.
+    std::function<bool(std::weak_ptr<SyncSession>, const sync::ProtocolErrorInfo&)> on_error_message_received_hook;
 
     explicit SyncConfig(std::shared_ptr<SyncUser> user, bson::Bson partition);
     explicit SyncConfig(std::shared_ptr<SyncUser> user, std::string partition);

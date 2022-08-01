@@ -1361,6 +1361,7 @@ void Session::cancel_resumption_delay()
         return;
 
     m_suspended = false;
+    m_stopped_for_testing = false;
 
     logger.debug("Resumed"); // Throws
 
@@ -2023,6 +2024,11 @@ void Session::receive_download_message(const SyncProgress& progress, std::uint_f
     // longer.
     if (m_state != Active)
         return;
+
+    if (REALM_UNLIKELY(m_stopped_for_testing)) {
+        logger.debug("Stopped for testing. Won't process download message");
+        return;
+    }
 
     bool legal_at_this_time = (m_ident_message_sent && !m_error_message_received && !m_unbound_message_received);
     if (REALM_UNLIKELY(!legal_at_this_time)) {

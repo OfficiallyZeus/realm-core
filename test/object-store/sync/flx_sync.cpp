@@ -776,6 +776,7 @@ TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view
     FLXSyncTestHarness harness("flx_bad_query", server_schema);
 
     auto test_obj_id = ObjectId::gen();
+    /*
     harness.load_initial_data([&](auto prep_realm) {
         CppContext c(prep_realm);
         Object::create(c, prep_realm, "TopLevel",
@@ -785,6 +786,7 @@ TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view
                            {"queryable_int_field", int64_t(50)},
                        }));
     });
+    */
 
     auto [error_received_promise, error_received_future] = util::make_promise_future<void>();
     auto shared_error_received_promise = std::make_shared<util::Promise<void>>(std::move(error_received_promise));
@@ -797,12 +799,16 @@ TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view
                                                              const sync::ProtocolErrorInfo& info) mutable {
             auto session = weak_session.lock();
             if (!session) {
-                return;
+                return true;
+            }
+            auto error_code = sync::ProtocolError(info.raw_error_code);
+            if (error_code == sync::ProtocolError::initial_sync_not_completed) {
+                return true;
             }
 
-            REQUIRE(sync::ProtocolError(info.raw_error_code) == sync::ProtocolError::compensating_write);
-            session->close();
+            REQUIRE(error_code == sync::ProtocolError::compensating_write);
             promise->emplace_value();
+            return false;
         };
 
     {
@@ -852,7 +858,7 @@ TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view
         CHECK_THAT(write_info.reason,
                    Catch::Matchers::ContainsSubstring("object is outside of the current query view"));
     }
-
+/*
     harness.load_initial_data([&](SharedRealm realm) {
         CppContext c(realm);
         Results res(realm, realm->read_group().get_table("class_TopLevel"));
@@ -861,9 +867,12 @@ TEST_CASE("flx: no compensating write for out-of-view write that becomes in-view
         Object obj(realm, res.get(0));
         obj.set_column_value("queryable_int_field", int64_t(100));
     });
+    */
+
+    config.sync_config->on_error_message_received_hook = {};
 
     auto realm = Realm::get_shared_realm(config);
-    wait_for_upload(*realm);
+    wait_for_upload(*realm, std::chrono::seconds(5000));
     wait_for_download(*realm);
 
     auto top_level_table = realm->read_group().get_table("class_TopLevel");
