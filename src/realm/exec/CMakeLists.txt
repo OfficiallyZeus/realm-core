@@ -57,6 +57,16 @@ set_target_properties(RealmDump PROPERTIES
     DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX}
 )
 
+if(REALM_LIBFUZZER)
+    find_package(LibUV REQUIRED)
+    add_executable(RealmFuzzer EXCLUDE_FROM_ALL realm_fuzzer.cpp)
+    set_target_properties(RealmFuzzer PROPERTIES
+        OUTPUT_NAME "realm-fuzzer"
+        DEBUG_POSTFIX ${CMAKE_DEBUG_POSTFIX}
+    )
+    target_link_libraries(RealmFuzzer ObjectStore Storage LibUV::LibUV)
+endif()
+
 install(TARGETS ${ExecTargetsToInstall}
         COMPONENT runtime
         DESTINATION bin)
