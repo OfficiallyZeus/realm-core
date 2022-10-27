@@ -512,7 +512,8 @@ bool ArrayString::verify_cluster(util::Logger& logger, std::vector<unsigned>& pa
                     logger.debug("Path %1: Medium string size mismatch %2 and %3", path, offs.size(), nulls.size());
                     err = true;
                 }
-                auto end = size_t(offs.get(offs.size() - 1));
+                auto sz = offs.size();
+                auto end = (sz > 0) ? size_t(offs.get(sz - 1)) : 0;
                 if (end != values.size()) {
                     logger.debug("Path %1: Medium string offset/values size mismatch: %2 and %3", path, end,
                                  values.size());

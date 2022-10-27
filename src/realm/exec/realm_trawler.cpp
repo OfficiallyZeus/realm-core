@@ -709,8 +709,16 @@ std::vector<FreeListEntry> Group::get_free_list() const
     std::vector<FreeListEntry> list;
     if (valid()) {
         unsigned sz = m_free_list_positions.size();
-        REALM_ASSERT(sz == m_free_list_sizes.size());
-        REALM_ASSERT(sz == m_free_list_versions.size());
+        if (sz != m_free_list_sizes.size()) {
+            std::cout << "FreeList positions size: " << sz << " FreeList sizes size: " << m_free_list_sizes.size()
+                      << std::endl;
+            return list;
+        }
+        if (sz != m_free_list_versions.size()) {
+            std::cout << "FreeList positions size: " << sz
+                      << " FreeList versions size: " << m_free_list_versions.size() << std::endl;
+            return list;
+        }
         for (unsigned i = 0; i < sz; i++) {
             int64_t pos = m_free_list_positions.get_val(i);
             int64_t size = m_free_list_sizes.get_val(i);

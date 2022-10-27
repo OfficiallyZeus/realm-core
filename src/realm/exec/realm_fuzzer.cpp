@@ -10,13 +10,17 @@
 #include "realm/object-store/results.hpp"
 #include <realm/object-store/util/scheduler.hpp>
 #include <realm/unicode.hpp>
+#include <external/json/json.hpp>
 
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <map>
 #include <uv.h>
 
 using namespace realm;
+
+std::map<TableKey, std::vector<std::string>> deleted_objects;
 
 static Mixed mutate(Mixed val, ColKey col_key, std::string& buffer)
 {
@@ -74,39 +78,39 @@ public:
     }
     bool step()
     {
-        auto step = get_instr() % 10;
+        auto step = get_instr(7);
         switch (step) {
             case 0:
                 break;
             case 1: {
                 if (m_object_info.size() < 20) {
-                    auto table_index = get_instr() % m_table_info.size();
+                    auto table_index = get_instr(m_table_info.size());
                     auto table_ref = m_realm->read_group().get_table(m_table_info[table_index].key);
                     if (auto sz = table_ref->size()) {
-                        auto object_index = get_instr() % sz;
+                        auto object_index = get_instr(sz);
                         m_object_info.emplace_back(m_table_info[table_index]);
                         ObjInfo& i = m_object_info.back();
                         i.object = Object(m_realm, i.table->name, object_index);
                         i.m_token = i.object.add_notification_callback([](CollectionChangeSet) {
-                            std::cout << "Notification received" << std::endl;
+                            // std::cout << "Notification received" << std::endl;
                         });
-                        std::cout << "Object added" << std::endl;
+                        // std::cout << "Object added" << std::endl;
                     }
                 }
                 break;
             }
             case 2: {
-                m_realm->async_begin_transaction([this] {
+                m_realm->async_begin_transaction([this]() {
                     if (!m_object_info.empty()) {
-                        ObjInfo& i = m_object_info[get_instr() % m_object_info.size()];
-                        auto& prop = i.table->properties[get_instr() % i.table->properties.size()];
+                        ObjInfo& i = m_object_info[get_instr(m_object_info.size())];
+                        auto& prop = i.table->properties[get_instr(i.table->properties.size())];
                         auto obj = i.object.obj();
                         auto mixed = obj.get_any(prop.key);
                         std::string buffer;
                         mixed = mutate(mixed, prop.key, buffer);
                         obj.set_any(prop.key, mixed);
                         m_realm->async_commit_transaction([](auto) {
-                            std::cout << "Object mutated" << std::endl;
+                            // std::cout << "Object mutated" << std::endl;
                         });
                     }
                 });
@@ -114,40 +118,93 @@ public:
             }
             case 3: {
                 if (!m_object_info.empty()) {
-                    auto it = m_object_info.begin() + (get_instr() % m_object_info.size());
+                    auto it = m_object_info.begin() + (get_instr(m_object_info.size()));
                     m_object_info.erase(it);
-                    std::cout << "Object removed" << std::endl;
+                    // std::cout << "Object removed" << std::endl;
                 }
                 break;
             }
             case 4: {
+                // std::cout << "Null transaction" << std::endl;
                 m_realm->begin_transaction();
                 m_realm->commit_transaction();
                 break;
             }
             case 5: {
-                m_realm->read_group();
-                m_frozen_realm = m_realm->freeze();
+                if (!m_frozen_realm) {
+                    // std::cout << "Freeze" << std::endl;
+                    m_realm->read_group();
+                    m_frozen_realm = m_realm->freeze();
+                }
                 break;
             }
             case 6: {
-                m_frozen_realm = nullptr;
+                if (m_frozen_realm) {
+                    // std::cout << "Delete frozen" << std::endl;
+                    m_frozen_realm = nullptr;
+                }
                 break;
             }
             case 7: {
-                util::StderrLogger logger;
-                m_realm->read_group().verify_cluster(logger);
                 break;
             }
             case 8: {
+                auto table_index = get_instr(m_table_info.size());
+                auto table_ref = m_realm->read_group().get_table(m_table_info[table_index].key);
+                m_realm->begin_transaction();
+                auto sz = table_ref->size();
+                if (sz > 10) {
+                    auto object_index = get_instr(sz);
+                    auto obj = table_ref->get_object(object_index);
+                    std::vector<std::string>& objects = deleted_objects[table_ref->get_key()];
+                    objects.push_back(obj.to_string());
+                    obj.remove();
+                    m_realm->commit_transaction();
+                }
+                else {
+                    m_realm->cancel_transaction();
+                }
                 break;
             }
             case 9: {
+                auto table_index = get_instr(m_table_info.size());
+                auto table_ref = m_realm->read_group().get_table(m_table_info[table_index].key);
+                std::vector<std::string>& objects = deleted_objects[table_ref->get_key()];
+                if (!objects.empty()) {
+                    m_realm->begin_transaction();
+                    std::string values = objects.back();
+                    auto j = nlohmann::json::parse(values);
+                    objects.pop_back();
+                    auto pk_col = table_ref->get_primary_key_column();
+                    Obj obj;
+                    if (pk_col) {
+                        std::string col_name{table_ref->get_column_name(pk_col)};
+                        auto id = j[col_name];
+                        Mixed pk_val;
+                        std::string string_val = id.get<std::string>();
+                        if (pk_col.get_type() == col_type_String) {
+                            pk_val = Mixed(StringData(string_val));
+                        }
+                        obj = table_ref->create_object_with_primary_key(pk_val);
+                    }
+                    else {
+                        obj = table_ref->create_object();
+                    }
+                    for (auto col : table_ref->get_column_keys()) {
+                        if (col == pk_col) {
+                            continue;
+                        }
+                    }
+                    m_realm->commit_transaction();
+                }
                 break;
             }
             default:
                 break;
         }
+        // std::cout << "Verify" << std::endl;
+        util::StderrLogger logger;
+        m_realm->read_group().verify_cluster(logger);
         return done;
     }
 
@@ -178,10 +235,10 @@ private:
     size_t m_step = 0;
     bool done = false;
 
-    int get_instr()
+    int get_instr(size_t max)
     {
         if (m_step < m_fuzzy.length()) {
-            return int(m_fuzzy[m_step++]) + 1;
+            return (int(uint8_t(m_fuzzy[m_step++])) + 1) % max;
         }
         done = true;
         return 0;
@@ -194,16 +251,19 @@ int LLVMFuzzerTestOneInput(const char* data, size_t size)
 {
     RealmConfig config;
     config.path = "default.realm";
-    Fuzzer fuzzer(Realm::get_shared_realm(config), std::string(data, size));
 
+    // std::cout << "---------------------------" << std::endl;
+    // std::cout << "Sequence length: " << size << std::endl;
     uv_loop_t* loop = uv_default_loop();
     uv_idle_t idle_handle;
-    idle_handle.data = &fuzzer;
+    idle_handle.data = new Fuzzer(Realm::get_shared_realm(config), std::string(data, size));
     uv_idle_init(loop, &idle_handle);
     uv_idle_start(&idle_handle, [](uv_idle_t* handle) {
-        auto done = static_cast<Fuzzer*>(handle->data)->step();
+        Fuzzer* fuzzer = static_cast<Fuzzer*>(handle->data);
+        auto done = fuzzer->step();
         if (done) {
-            uv_stop(handle->loop);
+            uv_idle_stop(handle);
+            delete fuzzer;
         }
     });
     uv_run(loop, UV_RUN_DEFAULT);
