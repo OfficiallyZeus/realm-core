@@ -72,6 +72,8 @@ public:
     public:
         void reset() noexcept;
 
+        std::string get_message();
+
     private:
         using milliseconds_lim = std::numeric_limits<milliseconds_type>;
 
@@ -292,6 +294,7 @@ enum class ClientImpl::ConnectionTerminationReason {
     server_said_try_again_later,       ///< Client received ERROR message with try_again=yes
     server_said_do_not_reconnect,      ///< Client received ERROR message with try_again=no
     pong_timeout,                      ///< Client did not receive PONG after PING
+    server_301_redirect,               ///< Server deployment region/server has been changed
 
     /// The application requested a feature that is unavailable in the
     /// negotiated protocol version.
@@ -1268,6 +1271,7 @@ inline bool ClientImpl::Connection::was_voluntary(ConnectionTerminationReason re
         case ConnectionTerminationReason::server_said_do_not_reconnect:
         case ConnectionTerminationReason::pong_timeout:
         case ConnectionTerminationReason::missing_protocol_feature:
+        case ConnectionTerminationReason::server_301_redirect:
             break;
     }
     return false;

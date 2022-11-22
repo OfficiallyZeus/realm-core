@@ -204,8 +204,10 @@ SyncSession::handle_refresh(const std::shared_ptr<SyncSession>& session)
                 // eg. ClientErrorCode::user_not_found, ClientErrorCode::user_not_logged_in
                 session->handle_bad_auth(session_user, error->error_code, error->message);
             }
-            else if (error->http_status_code &&
-                     (*error->http_status_code == 401 || *error->http_status_code == 403)) {
+            else if (error->http_status_code && (*error->http_status_code == 301 || *error->http_status_code == 401 ||
+                                                 *error->http_status_code == 403)) {
+                // A 301 response on a refresh request means that the deployment server or region has been changed
+                // and the user session is no longer valid. Log out the user.
                 // A 401 response on a refresh request means that the token cannot be refreshed and we should not
                 // retry. This can be because an admin has revoked this user's sessions, the user has been disabled,
                 // or the refresh token has expired according to the server's clock.
@@ -593,17 +595,22 @@ void SyncSession::handle_error(SyncError error)
                 break;
         }
     }
-    else {
-        // The server replies with '401: unauthorized' if the access token is invalid, expired, revoked, or the user
-        // is disabled. In this scenario we attempt an automatic token refresh and if that succeeds continue as
+    else if (error_code.category() == util::websocket::error_category() &&
+             (error_code == util::websocket::Error::bad_response_301_moved_permanently ||
+              error_code == util::websocket::Error::bad_response_401_unauthorized)) {
+        // If a 301 redirect is received while trying to connect to the server, it is likely that the
+        // server deployment region or server has been changed. Try to refresh the token, which will
+        // update the server location information.
+        // If the server replies with '401: unauthorized' if the access token is invalid, expired, revoked, or the
+        // user is disabled. In this scenario we attempt an automatic token refresh and if that succeeds continue as
         // normal. If the refresh request also fails with 401 then we need to stop retrying and pass along the error;
         // see handle_refresh().
-        if (error_code == util::websocket::make_error_code(util::websocket::Error::bad_response_401_unauthorized)) {
-            if (auto u = user()) {
-                u->refresh_custom_data(handle_refresh(shared_from_this()));
-                return;
-            }
+        if (auto u = user()) {
+            u->refresh_custom_data(handle_refresh(shared_from_this()));
+            return;
         }
+    }
+    else {
         // Unrecognized error code.
         error.is_unrecognized_by_client = true;
     }

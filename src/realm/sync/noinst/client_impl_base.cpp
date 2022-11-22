@@ -202,6 +202,48 @@ std::string ClientImpl::make_user_agent_string(ClientConfig& config)
     return out.str();                                     // Throws
 }
 
+std::string ClientImpl::ReconnectInfo::get_message()
+{
+    if (!m_reason) {
+        return "No reason";
+    }
+    switch (*m_reason) {
+        case ConnectionTerminationReason::connect_operation_failed:
+            return "Connect operation failed";
+        case ConnectionTerminationReason::closed_voluntarily:
+            return "Closed voluntarily";
+        case ConnectionTerminationReason::read_or_write_error:
+            return "Read or write error";
+        case ConnectionTerminationReason::ssl_certificate_rejected:
+            return "SSL certificate rejected";
+        case ConnectionTerminationReason::ssl_protocol_violation:
+            return "SSL protocol violation";
+        case ConnectionTerminationReason::websocket_protocol_violation:
+            return "Websocket protocol violation";
+        case ConnectionTerminationReason::http_response_says_fatal_error:
+            return "HTTP response fatal error";
+        case ConnectionTerminationReason::http_response_says_nonfatal_error:
+            return "HTTP response nonfatal error";
+        case ConnectionTerminationReason::bad_headers_in_http_response:
+            return "HTTP respnose bad headers";
+        case ConnectionTerminationReason::sync_protocol_violation:
+            return "Sync protocol violation";
+        case ConnectionTerminationReason::sync_connect_timeout:
+            return "Sync connect timeout";
+        case ConnectionTerminationReason::server_said_try_again_later:
+            return "Server response: try again later";
+        case ConnectionTerminationReason::server_said_do_not_reconnect:
+            return "Server response: do not reconnect";
+        case ConnectionTerminationReason::pong_timeout:
+            return "Pong timeout";
+        case ConnectionTerminationReason::server_301_redirect:
+            return "HTTP 301 redirect";
+        case ConnectionTerminationReason::missing_protocol_feature:
+            return "Missing protocol feature";
+    }
+    // default - unknown connection termination reason
+    return util::format("Unknown disconnect reason: %1", static_cast<int>(*m_reason));
+}
 
 void Connection::activate()
 {
@@ -340,14 +382,18 @@ void Connection::websocket_read_or_write_error_handler(std::error_code ec)
 void Connection::websocket_handshake_error_handler(std::error_code ec, const std::string_view* body)
 {
     bool is_fatal;
-    if (ec == util::websocket::Error::bad_response_3xx_redirection ||
-        ec == util::websocket::Error::bad_response_301_moved_permanently ||
-        ec == util::websocket::Error::bad_response_401_unauthorized ||
-        ec == util::websocket::Error::bad_response_5xx_server_error ||
-        ec == util::websocket::Error::bad_response_500_internal_server_error ||
-        ec == util::websocket::Error::bad_response_502_bad_gateway ||
-        ec == util::websocket::Error::bad_response_503_service_unavailable ||
-        ec == util::websocket::Error::bad_response_504_gateway_timeout) {
+    if (ec == util::websocket::Error::bad_response_301_moved_permanently) {
+        // Server or deployment region has been changed
+        is_fatal = false;
+        m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;
+    }
+    else if (ec == util::websocket::Error::bad_response_3xx_redirection ||
+             ec == util::websocket::Error::bad_response_401_unauthorized ||
+             ec == util::websocket::Error::bad_response_5xx_server_error ||
+             ec == util::websocket::Error::bad_response_500_internal_server_error ||
+             ec == util::websocket::Error::bad_response_502_bad_gateway ||
+             ec == util::websocket::Error::bad_response_503_service_unavailable ||
+             ec == util::websocket::Error::bad_response_504_gateway_timeout) {
         is_fatal = false;
         m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_nonfatal_error;
     }
@@ -491,6 +537,7 @@ void Connection::initiate_reconnect_wait()
                 case ConnectionTerminationReason::closed_voluntarily:
                 case ConnectionTerminationReason::read_or_write_error:
                 case ConnectionTerminationReason::pong_timeout:
+                case ConnectionTerminationReason::server_301_redirect:
                     // Minimum delay after successful connect operation
                     delay = min_delay;
                     break;
@@ -1048,7 +1095,8 @@ void Connection::close_due_to_missing_protocol_feature()
 void Connection::close_due_to_client_side_error(std::error_code ec, std::optional<std::string_view> msg,
                                                 bool is_fatal)
 {
-    logger.info("Connection closed due to error"); // Throws
+    logger.info("Connection closed due to %1 error: %2", is_fatal ? "fatal" : "non-fatal",
+                m_reconnect_info.get_message()); // Throws
     const bool try_again = !is_fatal;
     std::string message = ec.message();
     if (msg) {
