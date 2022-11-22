@@ -204,45 +204,47 @@ std::string ClientImpl::make_user_agent_string(ClientConfig& config)
 
 std::string ClientImpl::ReconnectInfo::get_message()
 {
-    if (!m_reason) {
-        return "No reason";
+    std::string reason = "No reason";
+    if (m_reason) {
+        switch (*m_reason) {
+            case ConnectionTerminationReason::connect_operation_failed:
+                reason = "Connect operation failed";
+            case ConnectionTerminationReason::closed_voluntarily:
+                reason = "Closed voluntarily";
+            case ConnectionTerminationReason::read_or_write_error:
+                reason = "Read or write error";
+            case ConnectionTerminationReason::ssl_certificate_rejected:
+                reason = "SSL certificate rejected";
+            case ConnectionTerminationReason::ssl_protocol_violation:
+                reason = "SSL protocol violation";
+            case ConnectionTerminationReason::websocket_protocol_violation:
+                reason = "Websocket protocol violation";
+            case ConnectionTerminationReason::http_response_says_fatal_error:
+                reason = "HTTP response fatal error";
+            case ConnectionTerminationReason::http_response_says_nonfatal_error:
+                reason = "HTTP response nonfatal error";
+            case ConnectionTerminationReason::bad_headers_in_http_response:
+                reason = "HTTP respnose bad headers";
+            case ConnectionTerminationReason::sync_protocol_violation:
+                reason = "Sync protocol violation";
+            case ConnectionTerminationReason::sync_connect_timeout:
+                reason = "Sync connect timeout";
+            case ConnectionTerminationReason::server_said_try_again_later:
+                reason = "Server response: try again later";
+            case ConnectionTerminationReason::server_said_do_not_reconnect:
+                reason = "Server response: do not reconnect";
+            case ConnectionTerminationReason::pong_timeout:
+                reason = "Pong timeout";
+            case ConnectionTerminationReason::server_301_redirect:
+                reason = "HTTP 301 redirect";
+            case ConnectionTerminationReason::missing_protocol_feature:
+                reason = "Missing protocol feature";
+            default:
+                // default - unknown connection termination reason
+                reason = util::format("Unknown disconnect reason: %1", static_cast<int>(*m_reason));
+        }
     }
-    switch (*m_reason) {
-        case ConnectionTerminationReason::connect_operation_failed:
-            return "Connect operation failed";
-        case ConnectionTerminationReason::closed_voluntarily:
-            return "Closed voluntarily";
-        case ConnectionTerminationReason::read_or_write_error:
-            return "Read or write error";
-        case ConnectionTerminationReason::ssl_certificate_rejected:
-            return "SSL certificate rejected";
-        case ConnectionTerminationReason::ssl_protocol_violation:
-            return "SSL protocol violation";
-        case ConnectionTerminationReason::websocket_protocol_violation:
-            return "Websocket protocol violation";
-        case ConnectionTerminationReason::http_response_says_fatal_error:
-            return "HTTP response fatal error";
-        case ConnectionTerminationReason::http_response_says_nonfatal_error:
-            return "HTTP response nonfatal error";
-        case ConnectionTerminationReason::bad_headers_in_http_response:
-            return "HTTP respnose bad headers";
-        case ConnectionTerminationReason::sync_protocol_violation:
-            return "Sync protocol violation";
-        case ConnectionTerminationReason::sync_connect_timeout:
-            return "Sync connect timeout";
-        case ConnectionTerminationReason::server_said_try_again_later:
-            return "Server response: try again later";
-        case ConnectionTerminationReason::server_said_do_not_reconnect:
-            return "Server response: do not reconnect";
-        case ConnectionTerminationReason::pong_timeout:
-            return "Pong timeout";
-        case ConnectionTerminationReason::server_301_redirect:
-            return "HTTP 301 redirect";
-        case ConnectionTerminationReason::missing_protocol_feature:
-            return "Missing protocol feature";
-    }
-    // default - unknown connection termination reason
-    return util::format("Unknown disconnect reason: %1", static_cast<int>(*m_reason));
+    return reason;
 }
 
 void Connection::activate()
