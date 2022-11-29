@@ -72,7 +72,7 @@ public:
     public:
         void reset() noexcept;
 
-        std::string get_message();
+        const std::string_view get_message();
 
     private:
         using milliseconds_lim = std::numeric_limits<milliseconds_type>;
@@ -295,6 +295,7 @@ enum class ClientImpl::ConnectionTerminationReason {
     server_said_do_not_reconnect,      ///< Client received ERROR message with try_again=no
     pong_timeout,                      ///< Client did not receive PONG after PING
     server_301_redirect,               ///< Server deployment region/server has been changed
+    server_301_too_many_redirects,     ///< Server subsequent redirections exceeded limit (20)
 
     /// The application requested a feature that is unavailable in the
     /// negotiated protocol version.
@@ -310,6 +311,9 @@ public:
     using SSLVerifyCallback = SyncConfig::SSLVerifyCallback;
     using ProxyConfig = SyncConfig::ProxyConfig;
     using ReconnectInfo = ClientImpl::ReconnectInfo;
+
+    // Limit the maximum number of handled redirect responses
+    const int max_redirect_count = 20;
 
     std::shared_ptr<util::Logger> logger_ptr;
     util::Logger& logger;
@@ -438,6 +442,7 @@ private:
     void initiate_connect_wait();
     void handle_connect_wait(std::error_code);
 
+    bool update_location_parameters(const std::string_view& location);
     void handle_connection_established();
     void schedule_urgent_ping();
     void initiate_ping_delay(milliseconds_type now);
@@ -493,9 +498,10 @@ private:
 
     ClientImpl& m_client;
     std::unique_ptr<util::websocket::EZSocket> m_websocket;
-    const ProtocolEnvelope m_protocol_envelope;
-    const std::string m_address;
-    const port_type m_port;
+    // These parameters may be updated if a 301 redirect response is received
+    ProtocolEnvelope m_protocol_envelope;
+    std::string m_address;
+    port_type m_port;
     const bool m_verify_servers_ssl_certificate;
     const util::Optional<std::string> m_ssl_trust_certificate_path;
     const std::function<SSLVerifyCallback> m_ssl_verify_callback;
@@ -539,6 +545,9 @@ private:
 
     // At least one PING message was sent since connection was established
     bool m_ping_sent = false;
+
+    // Number of repeat redirects that occurred while connecting
+    int m_num_redirects = 0;
 
     // The timer will be constructed on demand, and will only be destroyed when
     // canceling a reconnect or disconnect delay.
@@ -587,6 +596,7 @@ private:
     OutputBuffer m_output_buffer;
 
     const connection_ident_type m_ident;
+    // The server endpoint is used to find the associated server slot in the client
     const ServerEndpoint m_server_endpoint;
     const std::string m_authorization_header_name;
     const std::map<std::string, std::string> m_custom_http_headers;
@@ -1272,6 +1282,7 @@ inline bool ClientImpl::Connection::was_voluntary(ConnectionTerminationReason re
         case ConnectionTerminationReason::pong_timeout:
         case ConnectionTerminationReason::missing_protocol_feature:
         case ConnectionTerminationReason::server_301_redirect:
+        case ConnectionTerminationReason::server_301_too_many_redirects:
             break;
     }
     return false;

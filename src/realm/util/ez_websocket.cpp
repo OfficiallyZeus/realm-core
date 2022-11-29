@@ -60,9 +60,22 @@ private:
         m_logger.error("Writing failed: %1", ec.message()); // Throws
         m_observer.websocket_read_or_write_error_handler(ec);
     }
-    void websocket_handshake_error_handler(std::error_code ec, const util::HTTPHeaders*,
+    void websocket_handshake_error_handler(std::error_code ec, const util::HTTPHeaders* headers,
                                            const std::string_view* body) override
     {
+        if (ec == websocket::Error::bad_response_301_moved_permanently) {
+            // If the response was a moved permanently, pass the error to the observer
+            // with the body equal to the new location
+            auto location = websocket_get_location_header(headers);
+            // if invalid headers or location field is missing
+            if (location.empty()) {
+                m_logger.error("Location field is missing from HTTP 301 response");
+                m_observer.websocket_handshake_error_handler(websocket::Error::bad_response_invalid_http, nullptr);
+                return;
+            }
+            m_observer.websocket_handshake_error_handler(websocket::Error::bad_response_301_moved_permanently,
+                                                         &location);
+        }
         m_observer.websocket_handshake_error_handler(ec, body);
     }
     void websocket_protocol_error_handler(std::error_code ec) override
@@ -76,6 +89,19 @@ private:
     bool websocket_binary_message_received(const char* ptr, std::size_t size) override
     {
         return m_observer.websocket_binary_message_received(ptr, size);
+    }
+
+    /// Return the location field in the response headers
+    std::string_view websocket_get_location_header(const util::HTTPHeaders* headers)
+    {
+        if (headers != nullptr) {
+            // HTTPHeaders does a case-insensitive search
+            auto location = headers->find("location");
+            if (location != headers->end()) {
+                return location->second;
+            }
+        }
+        return "";
     }
 
     void initiate_resolve();

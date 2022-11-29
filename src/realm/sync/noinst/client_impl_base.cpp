@@ -202,41 +202,53 @@ std::string ClientImpl::make_user_agent_string(ClientConfig& config)
     return out.str();                                     // Throws
 }
 
-std::string ClientImpl::ReconnectInfo::get_message()
+const std::string_view ClientImpl::ReconnectInfo::get_message()
 {
-    static std::map<ConnectionTerminationReason, std::string> termination_reasons = {
-        {ConnectionTerminationReason::connect_operation_failed, "Connect operation failed"},
-        {ConnectionTerminationReason::closed_voluntarily, "Closed voluntarily"},
-        {ConnectionTerminationReason::read_or_write_error, "Read or write error"},
-        {ConnectionTerminationReason::ssl_certificate_rejected, "SSL certificate rejected"},
-        {ConnectionTerminationReason::ssl_protocol_violation, "SSL protocol violation"},
-        {ConnectionTerminationReason::websocket_protocol_violation, "Websocket protocol violation"},
-        {ConnectionTerminationReason::http_response_says_fatal_error, "HTTP response fatal error"},
-        {ConnectionTerminationReason::http_response_says_nonfatal_error, "HTTP response nonfatal error"},
-        {ConnectionTerminationReason::bad_headers_in_http_response, "HTTP respnose bad headers"},
-        {ConnectionTerminationReason::sync_protocol_violation, "Sync protocol violation"},
-        {ConnectionTerminationReason::sync_connect_timeout, "Sync connect timeout"},
-        {ConnectionTerminationReason::server_said_try_again_later, "Server response: try again later"},
-        {ConnectionTerminationReason::server_said_do_not_reconnect, "Server response: do not reconnect"},
-        {ConnectionTerminationReason::pong_timeout, "Pong timeout"},
-        {ConnectionTerminationReason::server_301_redirect, "HTTP 301 redirect"},
-        {ConnectionTerminationReason::missing_protocol_feature, "Missing protocol feature"}};
-
-    if (!m_reason) {
+    if (!m_reason)
         return "No reason";
-    }
-    if (auto&& search = termination_reasons.find(*m_reason); search != termination_reasons.end()) {
-        return search->second;
-    }
-    else {
-        // default - unknown connection termination reason
-        return util::format("Unknown disconnect reason: %1", static_cast<int>(*m_reason));
+
+    switch (*m_reason) {
+        case ConnectionTerminationReason::connect_operation_failed:
+            return "Connect operation failed";
+        case ConnectionTerminationReason::closed_voluntarily:
+            return "Closed voluntarily";
+        case ConnectionTerminationReason::read_or_write_error:
+            return "Read or write error";
+        case ConnectionTerminationReason::ssl_certificate_rejected:
+            return "SSL certificate rejected";
+        case ConnectionTerminationReason::ssl_protocol_violation:
+            return "SSL protocol violation";
+        case ConnectionTerminationReason::websocket_protocol_violation:
+            return "Websocket protocol violation";
+        case ConnectionTerminationReason::http_response_says_fatal_error:
+            return "HTTP response fatal error";
+        case ConnectionTerminationReason::http_response_says_nonfatal_error:
+            return "HTTP response nonfatal error";
+        case ConnectionTerminationReason::bad_headers_in_http_response:
+            return "HTTP respnose bad headers";
+        case ConnectionTerminationReason::sync_protocol_violation:
+            return "Sync protocol violation";
+        case ConnectionTerminationReason::sync_connect_timeout:
+            return "Sync connect timeout";
+        case ConnectionTerminationReason::server_said_try_again_later:
+            return "Server response: try again later";
+        case ConnectionTerminationReason::server_said_do_not_reconnect:
+            return "Server response: do not reconnect";
+        case ConnectionTerminationReason::pong_timeout:
+            return "Pong timeout";
+        case ConnectionTerminationReason::server_301_redirect:
+            return "HTTP 301 redirect";
+        case ConnectionTerminationReason::server_301_too_many_redirects:
+            return "HTTP 301 too many redirects";
+        case ConnectionTerminationReason::missing_protocol_feature:
+            return "Missing protocol feature";
     }
 }
 
 void Connection::activate()
 {
     m_activated = true;
+    m_num_redirects = 0;
     if (m_num_active_sessions == 0)
         m_on_idle.trigger();
     // We cannot in general connect immediately, because a prior failure to
@@ -326,6 +338,7 @@ void Connection::cancel_reconnect_delay()
 
 void Connection::websocket_handshake_completion_handler(const std::string& protocol)
 {
+    m_num_redirects = 0;
     if (!protocol.empty()) {
         std::string_view expected_prefix =
             is_flx_sync_connection() ? get_flx_websocket_protocol_prefix() : get_pbs_websocket_protocol_prefix();
@@ -364,17 +377,52 @@ void Connection::websocket_handshake_completion_handler(const std::string& proto
 
 void Connection::websocket_read_or_write_error_handler(std::error_code ec)
 {
+    logger.error("Read/Write error: %1", ec.message());
+    m_num_redirects = 0;
     read_or_write_error(ec); // Throws
+}
+
+
+bool Connection::update_location_parameters(const std::string_view& location)
+{
+    ProtocolEnvelope protocol = {};
+    std::string address;
+    port_type port = {};
+    std::string path;
+    if (!m_client.decompose_server_url(std::string(location), protocol, address, port, path)) { // Throws
+        logger.error("Invalid redirect url: %1", location);
+        return false;
+    }
+
+    // If the url parsing was successful, update the connection parameters
+    m_protocol_envelope = protocol;
+    m_address = address;
+    m_port = port;
+    m_http_request_path_prefix = path;
+    return true;
 }
 
 
 void Connection::websocket_handshake_error_handler(std::error_code ec, const std::string_view* body)
 {
     bool is_fatal;
+    logger.error("Handshake error: %1", ec.message());
     if (ec == util::websocket::Error::bad_response_301_moved_permanently) {
-        // Server or deployment region has been changed
         is_fatal = false;
-        m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;
+        m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_nonfatal_error;
+        // The location header value is contained in body - check for invalid body value
+        if (body != nullptr && body->empty()) {
+            if (update_location_parameters(*body)) {
+                m_num_redirects++;
+                if (m_num_redirects > max_redirect_count) {
+                    m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_too_many_redirects;
+                    m_num_redirects = 0; // reset for retry attempt after delay
+                }
+                else {
+                    m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;
+                }
+            }
+        }
     }
     else if (ec == util::websocket::Error::bad_response_3xx_redirection ||
              ec == util::websocket::Error::bad_response_401_unauthorized ||
@@ -383,12 +431,14 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
              ec == util::websocket::Error::bad_response_502_bad_gateway ||
              ec == util::websocket::Error::bad_response_503_service_unavailable ||
              ec == util::websocket::Error::bad_response_504_gateway_timeout) {
-        is_fatal = false;
         m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_nonfatal_error;
+        m_num_redirects = 0;
+        is_fatal = false;
     }
     else {
-        is_fatal = true;
         m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_fatal_error;
+        m_num_redirects = 0;
+        is_fatal = true;
         if (body) {
             std::string_view identifier = "REALM_SYNC_PROTOCOL_MISMATCH";
             auto i = body->find(identifier);
@@ -419,7 +469,9 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
 
 void Connection::websocket_protocol_error_handler(std::error_code ec)
 {
+    logger.error("Protocol error: %1", ec.message());
     m_reconnect_info.m_reason = ConnectionTerminationReason::websocket_protocol_violation;
+    m_num_redirects = 0;
     bool is_fatal = true;                                       // A WebSocket protocol violation is a fatal error
     close_due_to_client_side_error(ec, std::nullopt, is_fatal); // Throws
 }
@@ -434,6 +486,7 @@ bool Connection::websocket_binary_message_received(const char* data, std::size_t
         return bool(m_websocket);
     }
 
+    m_num_redirects = 0;
     handle_message_received(data, size);
     return bool(m_websocket);
 }
@@ -443,6 +496,8 @@ bool Connection::websocket_close_message_received(std::error_code error_code, St
 {
     if (error_code.category() == websocket::websocket_close_status_category() && error_code.value() != 1005 &&
         error_code.value() != 1000) {
+        logger.error("Close error: %1", error_code.message());
+
         m_reconnect_info.m_reason = ConnectionTerminationReason::websocket_protocol_violation;
 
         constexpr bool try_again = true;
@@ -548,6 +603,7 @@ void Connection::initiate_reconnect_wait()
                         delay = max_delay;
                     break;
                 case ConnectionTerminationReason::server_said_try_again_later:
+                case ConnectionTerminationReason::server_301_too_many_redirects:
                     delay = max_delay;
                     record_delay_as_zero = true;
                     break;
@@ -1027,6 +1083,7 @@ void Connection::handle_disconnect_wait(std::error_code ec)
 
 void Connection::websocket_connect_error_handler(std::error_code ec)
 {
+    logger.error("Websocket connect failed: %1", ec.message()); // Throws
     m_reconnect_info.m_reason = ConnectionTerminationReason::connect_operation_failed;
     constexpr bool try_again = true;
     involuntary_disconnect(SessionErrorInfo{ec, try_again}); // Throws
