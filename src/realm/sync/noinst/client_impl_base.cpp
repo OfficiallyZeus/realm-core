@@ -379,7 +379,7 @@ void Connection::websocket_handshake_completion_handler(const std::string& proto
 
 void Connection::websocket_read_or_write_error_handler(std::error_code ec)
 {
-    logger.error("Read/Write error: %1", ec.message());
+    logger.error("WebSocket read/write error: %1", ec.message());
     m_num_redirects = 0;
     read_or_write_error(ec); // Throws
 }
@@ -392,7 +392,7 @@ bool Connection::update_location_parameters(const std::string_view& location)
     port_type port = {};
     std::string path;
     if (!m_client.decompose_server_url(std::string(location), protocol, address, port, path)) { // Throws
-        logger.error("Invalid redirect url: %1", location);
+        logger.error("Invalid WebSocket redirect url: %1", location);
         return false;
     }
 
@@ -408,29 +408,36 @@ bool Connection::update_location_parameters(const std::string_view& location)
 void Connection::websocket_handshake_error_handler(std::error_code ec, const std::string_view* body)
 {
     bool is_fatal;
-    logger.error("Handshake error: %1", ec.message());
     if (ec == util::websocket::Error::bad_response_301_moved_permanently) {
+        bool invalid_301_response = false;
+        is_fatal = false;
         // The location header value is contained in body - check for invalid body value
         if (REALM_UNLIKELY(body == nullptr || body->empty())) {
-            // If the location header value was not supplied, then this is an error with the server response
+            logger.error("Location header field empty in WebSocket redirect response");
+            invalid_301_response = true;
+        }
+        else {
+            m_num_redirects++;
+            if (m_num_redirects > max_redirect_count) {
+                logger.error("WebSocket successive redirects exceeded %1 times", max_redirect_count);
+                m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_too_many_redirects;
+                m_num_redirects = 0;                  // reset for retry attempt after delay
+                ec = ClientError::too_many_redirects; // pass this error to the client
+            }
+            else if (update_location_parameters(*body)) {
+                m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;
+            }
+            else {
+                invalid_301_response = true;
+            }
+            // else invalid 301 response
+        }
+        if (invalid_301_response) {
+            // If the location header value was not supplied or invalid, this is an error with the server response
             m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_fatal_error;
             m_num_redirects = 0;
             is_fatal = true;
             ec = util::websocket::Error::bad_response_invalid_http;
-        }
-        else {
-            is_fatal = false;
-            if (update_location_parameters(*body)) {
-                m_num_redirects++;
-                if (m_num_redirects > max_redirect_count) {
-                    m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_too_many_redirects;
-                    m_num_redirects = 0;                  // reset for retry attempt after delay
-                    ec = ClientError::too_many_redirects; // pass this error to the client
-                }
-                else {
-                    m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;
-                }
-            }
         }
     }
     else if (ec == util::websocket::Error::bad_response_3xx_redirection ||
@@ -440,11 +447,13 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
              ec == util::websocket::Error::bad_response_502_bad_gateway ||
              ec == util::websocket::Error::bad_response_503_service_unavailable ||
              ec == util::websocket::Error::bad_response_504_gateway_timeout) {
+        logger.debug("WebSocket handshake nonfatal error: %1", ec.message());
         m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_nonfatal_error;
         m_num_redirects = 0;
         is_fatal = false;
     }
     else {
+        logger.error("WebSocket handshake fatal error: %1", ec.message());
         m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_fatal_error;
         m_num_redirects = 0;
         is_fatal = true;
@@ -478,7 +487,7 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
 
 void Connection::websocket_protocol_error_handler(std::error_code ec)
 {
-    logger.error("Protocol error: %1", ec.message());
+    logger.error("WebSocket protocol error: %1", ec.message());
     m_reconnect_info.m_reason = ConnectionTerminationReason::websocket_protocol_violation;
     m_num_redirects = 0;
     bool is_fatal = true;                                       // A WebSocket protocol violation is a fatal error
@@ -505,7 +514,7 @@ bool Connection::websocket_close_message_received(std::error_code error_code, St
 {
     if (error_code.category() == websocket::websocket_close_status_category() && error_code.value() != 1005 &&
         error_code.value() != 1000) {
-        logger.error("Close error: %1", error_code.message());
+        logger.error("WebSocket close error: %1", error_code.message());
 
         m_reconnect_info.m_reason = ConnectionTerminationReason::websocket_protocol_violation;
 

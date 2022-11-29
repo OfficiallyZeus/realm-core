@@ -67,12 +67,6 @@ private:
             // If the response was a moved permanently, pass the error to the observer
             // with the body equal to the new location
             auto location = websocket_get_location_header(headers);
-            // if invalid headers or location field is missing
-            if (location.empty()) {
-                m_logger.error("Location field is missing from HTTP 301 response");
-                m_observer.websocket_handshake_error_handler(websocket::Error::bad_response_invalid_http, nullptr);
-                return;
-            }
             m_observer.websocket_handshake_error_handler(websocket::Error::bad_response_301_moved_permanently,
                                                          &location);
         }
