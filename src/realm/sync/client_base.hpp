@@ -105,6 +105,7 @@ enum class ClientError {
     missing_protocol_feature    = 128, ///< Requested feature missing in negotiated protocol version
     http_tunnel_failed          = 131, ///< Failed to establish HTTP tunnel with configured proxy
     auto_client_reset_failure   = 132, ///< A fatal error was encountered which prevents completion of a client reset
+    too_many_redirects          = 133, ///< Too many redirects occurred while connecting to the server
     // clang-format on
 };
 

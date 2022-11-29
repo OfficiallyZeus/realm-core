@@ -408,15 +408,22 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
     bool is_fatal;
     logger.error("Handshake error: %1", ec.message());
     if (ec == util::websocket::Error::bad_response_301_moved_permanently) {
-        is_fatal = false;
-        m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_nonfatal_error;
         // The location header value is contained in body - check for invalid body value
-        if (body != nullptr && body->empty()) {
+        if (REALM_UNLIKELY(body == nullptr || body->empty())) {
+            // If the location header value was not supplied, then this is an error with the server response
+            m_reconnect_info.m_reason = ConnectionTerminationReason::http_response_says_fatal_error;
+            m_num_redirects = 0;
+            is_fatal = true;
+            ec = util::websocket::Error::bad_response_invalid_http;
+        }
+        else {
+            is_fatal = false;
             if (update_location_parameters(*body)) {
                 m_num_redirects++;
                 if (m_num_redirects > max_redirect_count) {
                     m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_too_many_redirects;
                     m_num_redirects = 0; // reset for retry attempt after delay
+                    ec = ClientError::too_many_redirects; // pass this error to the client
                 }
                 else {
                     m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_redirect;

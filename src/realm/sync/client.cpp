@@ -106,6 +106,8 @@ const char* get_error_message(ClientError error_code)
             return "Failure to establish HTTP tunnel with configured proxy";
         case ClientError::auto_client_reset_failure:
             return "Automatic recovery from client reset failed";
+        case ClientError::too_many_redirects:
+            return "Too many redirects occurred while connecting to server";
     }
     return nullptr;
 }
