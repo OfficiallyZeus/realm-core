@@ -422,7 +422,7 @@ void Connection::websocket_handshake_error_handler(std::error_code ec, const std
                 m_num_redirects++;
                 if (m_num_redirects > max_redirect_count) {
                     m_reconnect_info.m_reason = ConnectionTerminationReason::server_301_too_many_redirects;
-                    m_num_redirects = 0; // reset for retry attempt after delay
+                    m_num_redirects = 0;                  // reset for retry attempt after delay
                     ec = ClientError::too_many_redirects; // pass this error to the client
                 }
                 else {
