@@ -243,6 +243,8 @@ const std::string_view ClientImpl::ReconnectInfo::get_message()
         case ConnectionTerminationReason::missing_protocol_feature:
             return "Missing protocol feature";
     }
+    // Reason not found in switch statement
+    REALM_UNREACHABLE(); // Throws
 }
 
 void Connection::activate()
