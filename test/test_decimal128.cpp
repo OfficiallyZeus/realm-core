@@ -191,12 +191,15 @@ TEST(Decimal_Array)
     arr.add(Decimal128(str0));
     arr.add(Decimal128(str1));
     arr.insert(1, Decimal128(str2));
+    arr.add(Decimal128(realm::null()));
 
     Decimal128 id2(str2);
     CHECK_EQUAL(arr.get(0), Decimal128(str0));
     CHECK_EQUAL(arr.get(1), id2);
     CHECK_EQUAL(arr.get(2), Decimal128(str1));
     CHECK_EQUAL(arr.find_first(id2), 1);
+    CHECK_EQUAL(arr.find_first(Decimal128("1000")), 2);
+    CHECK_EQUAL(arr.find_first(Decimal128(realm::null())), 3);
 
     arr.erase(1);
     CHECK_EQUAL(arr.get(1), Decimal128(str1));
@@ -206,8 +209,17 @@ TEST(Decimal_Array)
     arr.move(arr1, 1);
 
     CHECK_EQUAL(arr.size(), 1);
-    CHECK_EQUAL(arr1.size(), 1);
+    CHECK_EQUAL(arr1.size(), 2);
     CHECK_EQUAL(arr1.get(0), Decimal128(str1));
+    CHECK_EQUAL(arr1.get(1), Decimal128(realm::null()));
+
+    arr.clear();
+    CHECK_EQUAL(arr.size(), 0);
+
+    arr.add(Decimal128(0));
+    arr.add(Decimal128(realm::null()));
+    CHECK_NOT(arr.is_null(0));
+    CHECK(arr.is_null(1));
 
     arr.destroy();
     arr1.destroy();
