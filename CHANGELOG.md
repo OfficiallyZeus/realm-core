@@ -2,7 +2,7 @@
 
 ### Enhancements
 * <New feature description> (PR [#????](https://github.com/realm/realm-core/pull/????))
-* Normalize sync connection parameters for device information ([#6029](https://github.com/realm/realm-core/issues/6029))
+* None.
 
 ### Fixed
 * <How do the end-user experience this issue? what was the impact?> ([#????](https://github.com/realm/realm-core/issues/????), since v?.?.?)
@@ -18,8 +18,8 @@
   * `SubscriptionSet::find()` overloads now return `const Subscription*` with `nullptr` to signal not-found, rather than an at-end iterator
   * `MutableSubscriptionSet::erase()` now has overloads taking a `StringData name` or a `Query`. Both return a bool to indicate if anything was found and removed.
   * `MutableSubscriptionSet::commit()` is no longer `&&`-qualified. This means you no longer need to `std::move()` the set when calling it.
-* Device information in sync connection parameters was moved into a new `device` structure in App::Config ([PR #6066](https://github.com/realm/realm-core/pull/6066))
-* `sdk` is now a required field in the `device` structure in App::Config ([PR #6066](https://github.com/realm/realm-core/pull/6066))
+* Device information in sync connection parameters was moved into a new `device_info` structure in App::Config ([PR #6066](https://github.com/realm/realm-core/pull/6066))
+* `sdk` is now a required field in the `device_info` structure in App::Config ([PR #6066](https://github.com/realm/realm-core/pull/6066))
 
 ### Compatibility
 * Fileformat: Generates files with format v23. Reads and automatically upgrade from fileformat v5.
@@ -27,7 +27,7 @@
 -----------
 
 ### Internals
-* None.
+* Normalize sync connection parameters for device information ([#6029](https://github.com/realm/realm-core/issues/6029))
 
 ----------------------------------------------
 
