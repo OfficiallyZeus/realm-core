@@ -1654,9 +1654,6 @@ void Session::send_message()
     if (m_error_to_send)
         return send_json_error_message(); // Throws
 
-    if (m_connection_to_close)
-        return close_connection(); // Throws
-
     if (m_target_download_mark > m_last_download_mark_sent)
         return send_mark_message(); // Throws
 
@@ -1964,6 +1961,7 @@ void Session::send_json_error_message()
     REALM_ASSERT(!m_unbind_message_sent);
     REALM_ASSERT(m_error_to_send);
     REALM_ASSERT(m_client_error);
+    REALM_ASSERT(!m_wait_for_error_timer);
 
     ClientProtocol& protocol = m_conn.get_client_protocol();
     OutputBuffer& out = m_conn.get_output_buffer();
@@ -1981,9 +1979,19 @@ void Session::send_json_error_message()
     m_conn.initiate_write_message(out, this); // Throws
 
     m_error_to_send = false;
-    m_connection_to_close = true;
 
-    // Connection is waiting to be closed
+    m_wait_for_error_timer.emplace(m_conn.get_client().get_service());
+
+    logger.debug("Waiting for %1 milliseconds to get the ERROR message from the server", default_error_timeout);
+    m_wait_for_error_timer->async_wait(std::chrono::milliseconds(default_error_timeout), [this](std::error_code ec) {
+        if (ec == util::error::operation_aborted) {
+            return;
+        }
+
+        m_wait_for_error_timer.reset();
+        close_connection();
+    });
+
     enlist_to_send(); // Throws
 }
 
@@ -2017,11 +2025,9 @@ void Session::close_connection()
     REALM_ASSERT(m_state == Active);
     REALM_ASSERT(m_ident_message_sent);
     REALM_ASSERT(!m_unbind_message_sent);
-    REALM_ASSERT(m_connection_to_close);
     REALM_ASSERT(m_client_error);
 
     m_conn.close_due_to_protocol_error(m_client_error->code(), m_client_error->what()); // Throws
-    m_connection_to_close = false;
     m_client_error = util::none;
 }
 
@@ -2302,12 +2308,13 @@ std::error_code Session::receive_query_error_message(int error_code, std::string
 // deactivated upon return.
 std::error_code Session::receive_error_message(const ProtocolErrorInfo& info)
 {
+    // Reset the timer when an ERROR message is received
+    if (m_wait_for_error_timer) {
+        m_wait_for_error_timer.reset();
+    }
+
     logger.info("Received: ERROR \"%1\" (error_code=%2, try_again=%3, error_action=%4)", info.message,
                 info.raw_error_code, info.try_again, info.server_requests_action); // Throws
-
-    // Ignore the error because the connection is going to be closed.
-    if (m_connection_to_close)
-        return std::error_code{}; // Success
 
     bool legal_at_this_time = (m_bind_message_sent && !m_error_message_received && !m_unbound_message_received);
     if (REALM_UNLIKELY(!legal_at_this_time)) {
