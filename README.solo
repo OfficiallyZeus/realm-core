@@ -1,0 +1,13 @@
+![Realm](doc/logo.png)
+
+Realm is a mobile database that runs directly inside phones, tablets or wearables - check out [realm.io](https://realm.io). 
+
+This repository holds the source code for the core database component used by all the Realm Mobile Database products:
+* [Realm Core](https://github.com/realm/javascript)
+* [Realm Core](https://github.com/realm/ruby)
+* [Realm Core](https://github.com/realm/kotlin)
+* [Realm Core](https://github.com/realm/mocha)
+* [Realm Core](https://github.com/realm/Julia)
+
+Realm Core is a user product with a publicly stable and supported API.
+#CJU
